@@ -1,0 +1,77 @@
+---
+title: "ex2"
+author: "Matan Tsuberi & Ohad Dali"
+date: "19 בנובמבר 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+clean <- function (x){
+  x$Pclass = as.factor(x$Pclass)
+  x <- subset(x, select = -c(PassengerId, Name, Ticket, Cabin))
+  return(x)
+}
+
+augment <- function (x){
+  return(x)
+}
+```
+
+Get, clean and augment the train data.
+```{r}
+train <- read.csv("Titanic/train.csv", na.strings = "")
+
+train$Survived = as.factor(train$Survived)
+train <- clean(train)
+train <- augment(train)
+
+```
+
+Split train data into examples and validation
+```{r}
+set.seed(1) # consistent randomness
+
+indices <- sample(1:nrow(train), nrow(train)*.75)
+examples <- train[indices,]
+validation <- train[-indices,]
+
+```
+
+We take the dataframe, encode any `factor` colums as n-1 dummy vars and train a neural network with 1 hidden layer that contains 3 neurons to predict the survival.
+```{r}
+library(neuralnet)
+
+t <- examples
+n <- names(examples)
+f <- as.formula(paste("~", paste(n, collapse = " + ")))
+mat <- model.matrix(f, t)
+x <- as.data.frame(mat)
+n <- colnames(mat)
+f <- as.formula(paste("Survived1 ~", paste(n[!n %in% c("Survived1", "(Intercept)")], collapse = " + ")))
+nn <- neuralnet(f,x,
+                hidden=c(3), 
+                linear.output = FALSE,
+                rep = 5)
+```
+
+```{r}
+
+```
+
+
+Get, clean and augment the test data, just like the train data.
+```{r}
+test <- read.csv("Titanic/test.csv", na.strings = "")
+test <- clean(test)
+test <- augment(test)
+```
+
+Make predictions.
+```{r}
+
+```
