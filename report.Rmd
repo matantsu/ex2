@@ -1,0 +1,197 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+
+# Initial data processing
+
+We gather up all the data in a single dataframe so we can perform all of our cleaning and feature engineering simoultaniously on the train and test datasets.
+```{r}
+train = read.csv('Titanic/train.csv', na.strings = "")
+test = read.csv('Titanic/test.csv', na.strings = "")
+test$Survived = NA
+
+data = rbind(train,test)
+
+str(data)
+```
+Let's clean up the data a bit.
+```{r}
+
+colnames(data) = c("id","survived","class","name","sex","age","siblings","other_family","ticket","fare","cabin","port")
+
+data$survived = as.factor(data$survived)
+data$class = as.factor(data$class)
+data$cabin = as.character(data$cabin)
+```
+Let's see how many NA's we have in our data.
+```{r}
+for(col in names(data)){
+  print(col)
+  print(sum(!complete.cases(data[col])))
+}
+```
+
+We fill Na's with the following method:
+ - cabin NA's are replaced with an empty string
+ - fare & port NA's are replaced with the mean of non-NA value
+ - age is filled with a linear regression method using the other fields in the data.
+```{r}
+data$cabin[is.na(data$cabin)] = ""
+data$fare[is.na(data$fare)] = mean(data$fare, na.rm = T)
+data$port[is.na(data$port)] = names(which.max(table(data$port)))
+data$age[is.na(data$age)] = predict(lm(age ~ other_family + sex + siblings + other_family , data, na.action = na.omit),data)[is.na(data$age)]
+```
+
+Make sure we have no NA's (except survived)
+```{r}
+sum(!complete.cases(data[,-2]))
+```
+Great, now let's do some feature engineeing:
+  1. We get the familiy size
+  2. Bin rows according to age range
+  3. Extract some useful information from the name
+  4. Extract the cabin count and cabin first letter
+  5. Scaling age and fare
+```{r}
+data$familiy = data$siblings + data$other_family + 1
+
+data$child = data$age < 15
+data$adulecent = 15 <= data$age && data$age < 30
+data$adult = 30 <= data$age && data$age < 50
+data$old = 50 <= data$age
+
+data$honor = as.factor(sub(' ', '', sapply(as.character(data$name), FUN=function(x) strsplit(x, split='[,.]')[[1]][2])))
+
+data$cabin_count = sapply(strsplit(data$cabin, "\\s+"), length)
+
+data$cabin_letter = as.factor(sapply(data$cabin, function(x) {substr(x,1,1)}))
+
+data$fare = scale(data$fare)
+data$age = scale(data$age)
+
+str(data)
+```
+
+Let's get rid of unnesesery data.
+```{r}
+data = data[, -which(names(data) %in% c("name","cabin","ticket","siblings","other_family"))]
+attach(data)
+train = data[!is.na(survived),]
+test = data[is.na(survived),]
+str(data)
+```
+
+# Analysis
+
+Let's analyze the data a bit.
+```{r}
+table(survived,sex)
+table(survived,port)
+table(survived,class)
+table(survived,child)
+table(survived,cabin_count)
+table(survived,cabin_letter)
+```
+
+# Split
+
+Those all seem to be very important parameters, let's split the training data into validation and examples!
+```{r}
+ratio = 0.75
+set.seed(1)
+indecies = sample(1:nrow(train),nrow(train)*ratio)
+examples = train[indecies,]
+validation = train[-indecies,]
+```
+
+# Simplest Model
+
+Let's try to think of the simplest model for our problem.
+As we have seen, the most important paramenters for determening the survival are: sex and class.
+Let's use those to predict who survives using a simple formula(no learning).
+`survived ~ sex = female /\ class = 1`
+
+##Validation
+We get a decent accuracy on the train data (better than chance). 
+```{r}
+library(caret)
+values = factor(train$sex == "female" & train$class == "1", labels=c("0","1"))
+confusionMatrix(values, train$survived)
+```
+
+## Prediction
+
+Let's do the predictions and see how we did. (update: we got 0.71291 accuracy)
+```{r}
+predictions = factor(test$sex == "female" & test$class == "1", labels = c("0","1"))
+test$simple.model = predictions
+write.table(subset(test, select = c("id","simple.model")),
+            row.names=FALSE,
+            col.names = c("PassengerId","Survived"), 
+            "Predictions/simple.csv", 
+            quote = F, 
+            sep = ",")
+```
+![Proof of 0.71291 accuracy!](Predictions/simple.png)
+
+# Decision Tree (rpart)
+
+## Training
+
+Let's build a decision tree
+```{r}
+library(rpart)
+dt.model = rpart(survived ~ ., data, method = 'class')
+dt.model
+```
+
+## Validation
+
+That looks like a good start, we get a ~83% accuracy on the validation set with a CI of a minimum ~77% accuracy.
+```{r}
+library(caret)
+values = predict(dt.model, validation[,-2], type = 'class')
+confusionMatrix(validation[,2],values)
+```
+
+## Prediction
+
+Let's predict on the test data and see how we did on kaggle. (update: We got 0.78947, 3119th place)
+```{r}
+predictions = predict(dt.model, test[,-2], type = 'class')
+test$dt.model = predictions
+write.table(subset(test, select = c("id","dt.model")), row.names=FALSE, col.names = c("PassengerId","Survived"), "Predictions/dt.csv", quote = F, sep = ",")
+```
+![Proof of 3119 place!](Predictions/dt.png)
+
+
+# Ensemble (Weighted Subspace Random Forests)
+
+## Training
+Let's try a random forest ensemble.
+```{r}
+library(caret)
+en.model = train(survived ~ .,data=examples, method="wsrf",
+                trControl=trainControl(method="cv",number=5))
+en.model
+```
+## Validation
+
+We get a better accuracy, with a better CI (minimum: ~78.8%).
+```{r}
+library(caret)
+values = predict(en.model, validation[,-2], type = 'raw')
+confusionMatrix(validation[,2],values)
+```
+
+## Prediction
+Let's predict on the test data and see how we did on kaggle. (update: We got 0.79425, 2439th place)
+```{r}
+predictions = predict(en.model, test[,-2], type = 'raw')
+test$en.model = predictions
+write.table(subset(test, select = c("id","en.model")), row.names=FALSE,col.names = c("PassengerId","Survived"), "Predictions/en.csv", quote = F, sep = ",")
+```
+![Proof of 2439 place!](Predictions/en.png)
